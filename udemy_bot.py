@@ -187,13 +187,13 @@ def main():
     # Email configuration
     email_config = {
         'email': 'harusenpaiweeb@gmail.com',
-        'password': 'cwki gadp fasg ofl1',  # Your Gmail app password
+        'password': 'ytew vyhk hclq sjjc',  # Your new Gmail app password
         'imap_server': 'imap.gmail.com'
     }
     
     # Telegram configuration
     telegram_config = {
-        'bot_token': '8347731744:AAETdiQYW2CrikE-ntAHzdjCtbP33NLzBMg',
+        'bot_token': '8347731744:AAGRdAp32eWzfnbbzdafMpYWkSduTXBv4P4',
         'chat_id': '-1002045295402'
     }
     
