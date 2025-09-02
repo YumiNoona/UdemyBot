@@ -1,65 +1,188 @@
-# udemy_bot_async.py
-import asyncio
 import imaplib
 import email
-import os
+import re
+import time
+import requests
+import json
 from email.header import decode_header
-from telegram import Bot
+import logging
 
-EMAIL_USER = os.environ["EMAIL_USER"]
-EMAIL_PASS = os.environ["EMAIL_PASS"]
-TELEGRAM_TOKEN = os.environ["TELEGRAM_TOKEN"]
-CHAT_ID = int(os.environ["TELEGRAM_CHAT_ID"])
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-bot = Bot(token=TELEGRAM_TOKEN)
-
-IMAP_SERVER = "imap.gmail.com"
-
-async def check_email():
-    while True:
+class UdemyCodeBot:
+    def __init__(self, email_config, telegram_config):
+        self.email_config = email_config
+        self.telegram_config = telegram_config
+        self.processed_emails = set()  # Keep track of processed emails
+        
+    def connect_to_email(self):
+        """Connect to email server"""
         try:
-            mail = imaplib.IMAP4_SSL(IMAP_SERVER)
-            mail.login(EMAIL_USER, EMAIL_PASS)
-            mail.select("inbox")
-
-            # Search for unseen Udemy emails
-            status, messages = mail.search(None, '(UNSEEN FROM "noreply@udemy.com")')
-            email_ids = messages[0].split()
-
-            for eid in email_ids:
-                status, msg_data = mail.fetch(eid, "(RFC822)")
-                raw_email = msg_data[0][1]
-                msg = email.message_from_bytes(raw_email)
-
-                # Extract email subject
-                subject, encoding = decode_header(msg["Subject"])[0]
-                if isinstance(subject, bytes):
-                    subject = subject.decode(encoding if encoding else "utf-8")
-
-                # Extract the email body
-                if msg.is_multipart():
-                    for part in msg.walk():
-                        if part.get_content_type() == "text/plain":
-                            body = part.get_payload(decode=True).decode()
-                            break
-                else:
-                    body = msg.get_payload(decode=True).decode()
-
-                # Send code to Telegram
-                await bot.send_message(chat_id=CHAT_ID, text=f"Udemy Code:\n{body}")
-
-                # Mark as seen
-                mail.store(eid, '+FLAGS', '\\Seen')
-
-            mail.logout()
-
+            mail = imaplib.IMAP4_SSL(self.email_config['imap_server'])
+            mail.login(self.email_config['email'], self.email_config['password'])
+            mail.select('inbox')
+            return mail
         except Exception as e:
-            print("Error:", e)
+            logging.error(f"Failed to connect to email: {e}")
+            return None
+    
+    def extract_udemy_code(self, email_body):
+        """Extract verification code from Udemy email"""
+        # Common patterns for Udemy verification codes
+        patterns = [
+            r'verification code[:\s]*(\d{6})',
+            r'code[:\s]*(\d{6})',
+            r'Your code[:\s]*(\d{6})',
+            r'(\d{6})',  # Any 6-digit number as fallback
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, email_body, re.IGNORECASE)
+            if match:
+                return match.group(1)
+        return None
+    
+    def send_telegram_message(self, message):
+        """Send message to Telegram group"""
+        url = f"https://api.telegram.org/bot{self.telegram_config['bot_token']}/sendMessage"
+        data = {
+            'chat_id': self.telegram_config['chat_id'],
+            'text': message,
+            'parse_mode': 'HTML'
+        }
+        
+        try:
+            response = requests.post(url, data=data)
+            if response.status_code == 200:
+                logging.info("Message sent successfully to Telegram")
+                return True
+            else:
+                logging.error(f"Failed to send message: {response.text}")
+                return False
+        except Exception as e:
+            logging.error(f"Error sending Telegram message: {e}")
+            return False
+    
+    def get_email_body(self, msg):
+        """Extract email body from message"""
+        body = ""
+        if msg.is_multipart():
+            for part in msg.walk():
+                content_type = part.get_content_type()
+                content_disposition = str(part.get("Content-Disposition"))
+                
+                if content_type == "text/plain" and "attachment" not in content_disposition:
+                    try:
+                        body = part.get_payload(decode=True).decode()
+                        break
+                    except:
+                        pass
+                elif content_type == "text/html" and "attachment" not in content_disposition and not body:
+                    try:
+                        body = part.get_payload(decode=True).decode()
+                    except:
+                        pass
+        else:
+            try:
+                body = msg.get_payload(decode=True).decode()
+            except:
+                pass
+        
+        return body
+    
+    def check_emails(self):
+        """Check for new Udemy emails and extract codes"""
+        mail = self.connect_to_email()
+        if not mail:
+            return
+        
+        try:
+            # Search for emails from Udemy
+            status, messages = mail.search(None, 'FROM "udemy" UNSEEN')
+            
+            if status == 'OK':
+                email_ids = messages[0].split()
+                
+                for email_id in email_ids:
+                    if email_id in self.processed_emails:
+                        continue
+                    
+                    status, msg_data = mail.fetch(email_id, '(RFC822)')
+                    
+                    if status == 'OK':
+                        email_message = email.message_from_bytes(msg_data[0][1])
+                        
+                        # Get subject
+                        subject = decode_header(email_message["Subject"])[0][0]
+                        if isinstance(subject, bytes):
+                            subject = subject.decode()
+                        
+                        # Check if it's a verification email
+                        if any(keyword in subject.lower() for keyword in ['verification', 'code', 'login', 'sign in']):
+                            body = self.get_email_body(email_message)
+                            code = self.extract_udemy_code(body)
+                            
+                            if code:
+                                message = f"🎓 <b>Udemy Verification Code</b>\n\n" \
+                                         f"Code: <code>{code}</code>\n" \
+                                         f"Subject: {subject}\n\n" \
+                                         f"<i>Auto-forwarded from email</i>"
+                                
+                                if self.send_telegram_message(message):
+                                    self.processed_emails.add(email_id)
+                                    logging.info(f"Sent code {code} to Telegram")
+                                else:
+                                    logging.error("Failed to send to Telegram")
+                            else:
+                                logging.info(f"No code found in email: {subject}")
+                        
+                        self.processed_emails.add(email_id)
+            
+        except Exception as e:
+            logging.error(f"Error checking emails: {e}")
+        finally:
+            mail.close()
+            mail.logout()
+    
+    def run(self, check_interval=30):
+        """Run the bot continuously"""
+        logging.info("Starting Udemy Code Bot...")
+        logging.info(f"Checking emails every {check_interval} seconds")
+        
+        # Send startup message
+        startup_msg = "🤖 <b>Udemy Code Bot Started</b>\n\nBot is now monitoring for Udemy verification codes!"
+        self.send_telegram_message(startup_msg)
+        
+        while True:
+            try:
+                self.check_emails()
+                time.sleep(check_interval)
+            except KeyboardInterrupt:
+                logging.info("Bot stopped by user")
+                break
+            except Exception as e:
+                logging.error(f"Unexpected error: {e}")
+                time.sleep(60)  # Wait longer on error
 
-        await asyncio.sleep(20)  # check every 20s
-
-async def main():
-    await check_email()
+# Configuration
+def main():
+    # Email configuration
+    email_config = {
+        'email': 'harusenpaiweeb@gmail.com',
+        'password': 'cwki gadp fasg ofl1',  # Your Gmail app password
+        'imap_server': 'imap.gmail.com'
+    }
+    
+    # Telegram configuration
+    telegram_config = {
+        'bot_token': '8347731744:AAETdiQYW2CrikE-ntAHzdjCtbP33NLzBMg',
+        'chat_id': '-1002045295402'
+    }
+    
+    # Create and run bot
+    bot = UdemyCodeBot(email_config, telegram_config)
+    bot.run(check_interval=30)  # Check every 30 seconds
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
