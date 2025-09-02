@@ -6,9 +6,24 @@ import requests
 import json
 from email.header import decode_header
 import logging
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+import os
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+class HealthHandler(BaseHTTPRequestHandler):
+    """Simple HTTP handler for health checks"""
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b'Udemy Bot is running!')
+    
+    def log_message(self, format, *args):
+        # Suppress HTTP server logs
+        pass
 
 class UdemyCodeBot:
     def __init__(self, email_config, telegram_config):
@@ -145,10 +160,9 @@ class UdemyCodeBot:
             mail.close()
             mail.logout()
     
-    def run(self, check_interval=30):
-        """Run the bot continuously"""
+    def run_bot(self):
+        """Run the email checking bot"""
         logging.info("Starting Udemy Code Bot...")
-        logging.info(f"Checking emails every {check_interval} seconds")
         
         # Send startup message
         startup_msg = "🤖 <b>Udemy Code Bot Started</b>\n\nBot is now monitoring for Udemy verification codes!"
@@ -157,15 +171,18 @@ class UdemyCodeBot:
         while True:
             try:
                 self.check_emails()
-                time.sleep(check_interval)
-            except KeyboardInterrupt:
-                logging.info("Bot stopped by user")
-                break
+                time.sleep(30)  # Check every 30 seconds
             except Exception as e:
-                logging.error(f"Unexpected error: {e}")
+                logging.error(f"Bot error: {e}")
                 time.sleep(60)  # Wait longer on error
 
-# Configuration
+def start_health_server():
+    """Start HTTP server for health checks"""
+    port = int(os.getenv('PORT', 8000))
+    server = HTTPServer(('0.0.0.0', port), HealthHandler)
+    logging.info(f"Health server starting on port {port}")
+    server.serve_forever()
+
 def main():
     # Email configuration
     email_config = {
@@ -180,9 +197,15 @@ def main():
         'chat_id': '-1002045295402'
     }
     
-    # Create and run bot
+    # Create bot
     bot = UdemyCodeBot(email_config, telegram_config)
-    bot.run(check_interval=30)  # Check every 30 seconds
+    
+    # Start health server in background thread
+    health_thread = threading.Thread(target=start_health_server, daemon=True)
+    health_thread.start()
+    
+    # Run bot
+    bot.run_bot()
 
 if __name__ == "__main__":
     main()
