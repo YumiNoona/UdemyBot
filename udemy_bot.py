@@ -6,8 +6,8 @@ import time
 from telegram import Bot
 
 # --- Load secrets from environment variables ---
-EMAIL_USER = os.getenv("EMAIL_USER")         # e.g. "harusenpaiweeb@gmail.com"
-EMAIL_PASS = os.getenv("EMAIL_PASS")         # your Gmail app password
+EMAIL_USER = os.getenv("EMAIL_USER")         # harusenpaiweeb@gmail.com
+EMAIL_PASS = os.getenv("EMAIL_PASS")         # cwki gadp fasg ofil
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN") # from @BotFather
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID") # your group/user ID
 
